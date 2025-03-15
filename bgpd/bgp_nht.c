@@ -400,6 +400,17 @@ int bgp_find_or_add_nexthop(struct bgp *bgp_route, struct bgp *bgp_nexthop,
 		bnc = bnc_new(tree, &p, srte_color, ifindex);
 		bnc->afi = afi;
 		bnc->bgp = bgp_nexthop;
+
+		/*
+		 * For IPv6 LL nexthops, if the ifIndex is known, set
+		 * the nexthop valid flag and nexthop_num > 0 on the
+		 * new entry such that bgp_isvalid_nexthop() will pass
+		*/
+		if (bnc->ifindex_ipv6_ll && ifindex > 0) {
+			SET_FLAG(bnc->flags, BGP_NEXTHOP_VALID);
+			bnc->nexthop_num = 1;
+		}
+
 		if (BGP_DEBUG(nht, NHT))
 			zlog_debug("Allocated bnc %pFX(%d)(%u)(%s) peer %p",
 				   &bnc->prefix, bnc->ifindex_ipv6_ll,
