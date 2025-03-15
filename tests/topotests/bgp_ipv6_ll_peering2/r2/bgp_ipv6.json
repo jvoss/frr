@@ -1,0 +1,73 @@
+{
+    "vrfId": 0,
+    "vrfName": "default",
+    "routerId": "2.2.2.2",
+    "defaultLocPrf": 100,
+    "localAS": 2,
+    "routes": {
+      "2001:1::/64": [
+        {
+          "valid": true,
+          "bestpath": true,
+          "selectionReason": "First path received",
+          "pathFrom": "external",
+          "prefix": "2001:1::",
+          "prefixLen": 64,
+          "network": "2001:1::/64",
+          "weight": 0,
+          "peerId": "2001::1",
+          "path": "1 65001",
+          "origin": "IGP",
+          "nexthops": [
+            {
+              "ip": "2001::1",
+              "hostname": "r1",
+              "afi": "ipv6",
+              "scope": "global",
+              "linkLocalOnly": false,
+              "length": 32
+            },
+            {
+              "hostname": "r1",
+              "afi": "ipv6",
+              "scope": "link-local",
+              "used": true
+            }
+          ]
+        }
+      ],
+      "2001:2::/64": [
+        {
+          "valid": true,
+          "bestpath": true,
+          "selectionReason": "First path received",
+          "pathFrom": "external",
+          "prefix": "2001:2::",
+          "prefixLen": 64,
+          "network": "2001:2::/64",
+          "metric": 0,
+          "weight": 0,
+          "peerId": "fe80::2",
+          "path": "65002",
+          "origin": "IGP",
+          "nexthops": [
+            {
+              "ip": "fe80::2",
+              "hostname": "ce2",
+              "afi": "ipv6",
+              "scope": "link-local",
+              "linkLocalOnly": false,
+              "length": 32,
+              "used": true
+            },
+            {
+              "ip": "fe80::2",
+              "hostname": "ce2",
+              "afi": "ipv6",
+              "scope": "link-local"
+            }
+          ]
+        }
+      ]
+    }
+}
