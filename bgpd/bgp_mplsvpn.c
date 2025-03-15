@@ -1174,7 +1174,7 @@ static bool leak_update_nexthop_valid(struct bgp *to_bgp, struct bgp_dest *bn,
 						   bpi_ultimate);
 
 	/*
-	 * If you are using SRv6 VPN instead of MPLS, it need to check
+	 * If you are using SRv6 VPN instead of MPLS, it needs to check
 	 * the SID allocation. If the sid is not allocated, the rib
 	 * will be invalid.
 	 * If the SID per VRF is not available, also consider the rib as
