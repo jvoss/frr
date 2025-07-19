@@ -430,7 +430,12 @@ static void logging_daemon_file_filename_cli_write(struct vty *vty, const struct
 
 static void logging_facility_cli_write(struct vty *vty, const struct lyd_node *dnode, bool show_defaults)
 {
-	vty_out(vty, "log facility %s\n", yang_dnode_get_string(dnode, NULL));
+	const char *val = yang_dnode_get_string(dnode, NULL);
+
+    if (val && strncmp(val, "ietf-syslog-types:", 18) == 0)
+		val += 18;
+
+	vty_out(vty, "log facility %s\n", val);
 }
 
 static void logging_record_priority_cli_write(struct vty *vty, const struct lyd_node *dnode, bool show_defaults)
