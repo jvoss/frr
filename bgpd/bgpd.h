@@ -508,6 +508,22 @@ PREDECL_DLIST(bgp_clearing_info);
 /* Hash of peers in clearing info object */
 PREDECL_HASH(bgp_clearing_hash);
 
+/* Prefixes waiting for RPKI revalidation, one list per AFI/SAFI.
+ * Queued and drained by the RPKI module (bgp_rpki.c).
+ */
+PREDECL_LIST(rpki_revalidate_list);
+
+struct rpki_revalidate_prefix {
+	struct bgp *bgp;
+	struct prefix prefix;
+	afi_t afi;
+	safi_t safi;
+
+	struct rpki_revalidate_list_item item;
+};
+
+DECLARE_LIST(rpki_revalidate_list, struct rpki_revalidate_prefix, item);
+
 /* Info about a batch of peers that need to be cleared from the RIB.
  * If many peers need to be cleared, we process them in batches, taking
  * one walk through the RIB for each batch. This is only used for "all"
@@ -670,6 +686,7 @@ struct bgp {
 	struct event *t_update_delay;
 	struct event *t_establish_wait;
 	struct event *t_revalidate[AFI_MAX][SAFI_MAX];
+	struct rpki_revalidate_list_head rpki_revalidate[AFI_MAX][SAFI_MAX];
 
 	uint8_t update_delay_over;
 	uint8_t main_zebra_update_hold;
