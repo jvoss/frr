@@ -519,6 +519,10 @@ struct rpki_revalidate_prefix {
 	afi_t afi;
 	safi_t safi;
 
+	/* Walk state, kept locked while the walk of the subtree is paused */
+	struct route_node *match;
+	struct route_node *rn;
+
 	struct rpki_revalidate_list_item item;
 };
 

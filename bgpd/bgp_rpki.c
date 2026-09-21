@@ -592,37 +592,62 @@ static void pfx_record_to_prefix(struct pfx_record *record,
 	}
 }
 
+static void rpki_revalidate_prefix_free(struct rpki_revalidate_prefix *rrp)
+{
+	if (rrp->rn)
+		route_unlock_node(rrp->rn);
+	if (rrp->match)
+		route_unlock_node(rrp->match);
+
+	XFREE(MTYPE_BGP_RPKI_REVALIDATE, rrp);
+}
+
 /*
  * Drain the revalidation queue of one (bgp, afi, safi).
  *
  * All prefixes queued for the same (afi, safi) share the single
  * bgp->t_revalidate[afi][safi] event, so this handler must process every
  * queued item, not just one. If it runs out of time it reschedules itself
- * on the same event slot.
+ * on the same event slot, and resumes where it stopped, also in the middle
+ * of the subtree of one item (which can be the whole table).
  */
 static void rpki_revalidate_prefix(struct event *event)
 {
 	struct rpki_revalidate_list_head *head = EVENT_ARG(event);
 	struct rpki_revalidate_prefix *rrp;
 
-	while ((rrp = rpki_revalidate_list_pop(head))) {
+	while ((rrp = rpki_revalidate_list_first(head))) {
 		struct bgp *bgp = rrp->bgp;
 		afi_t afi = rrp->afi;
 		safi_t safi = rrp->safi;
-		struct route_node *match, *rn;
+		bool yield = false;
 
-		match = bgp_table_subtree_lookup(bgp->rib[afi][safi], &rrp->prefix);
+		if (!rrp->match) {
+			rrp->match = bgp_table_subtree_lookup(bgp->rib[afi][safi], &rrp->prefix);
+			/* Keep the lookup's lock on the subtree root, which is
+			 * the limit of the walk, and take one more for the walk.
+			 */
+			if (rrp->match)
+				rrp->rn = route_lock_node(rrp->match);
+		}
 
-		for (rn = match; rn; rn = route_next_until(rn, match)) {
-			struct bgp_dest *dest = bgp_dest_from_rnode(rn);
+		while (rrp->rn && !yield) {
+			struct bgp_dest *dest = bgp_dest_from_rnode(rrp->rn);
 
 			if (dest && bgp_dest_has_bgp_path_info_data(dest))
 				revalidate_bgp_node(bgp, dest, afi, safi);
+
+			rrp->rn = route_next_until(rrp->rn, rrp->match);
+			yield = rrp->rn && event_should_yield(event);
 		}
 
-		XFREE(MTYPE_BGP_RPKI_REVALIDATE, rrp);
+		if (!yield) {
+			rpki_revalidate_list_pop(head);
+			rpki_revalidate_prefix_free(rrp);
+			yield = rpki_revalidate_list_count(head) && event_should_yield(event);
+		}
 
-		if (rpki_revalidate_list_count(head) && event_should_yield(event)) {
+		if (yield) {
 			event_add_event(bm->master, rpki_revalidate_prefix, head, 0,
 					&bgp->t_revalidate[afi][safi]);
 			return;
@@ -640,7 +665,7 @@ static int bgp_rpki_inst_delete(struct bgp *bgp)
 		event_cancel(&bgp->t_revalidate[afi][safi]);
 
 		while ((rrp = rpki_revalidate_list_pop(&bgp->rpki_revalidate[afi][safi])))
-			XFREE(MTYPE_BGP_RPKI_REVALIDATE, rrp);
+			rpki_revalidate_prefix_free(rrp);
 	}
 
 	return 0;
