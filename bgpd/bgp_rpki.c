@@ -59,6 +59,7 @@ DEFINE_MTYPE_STATIC(BGPD, BGP_RPKI_REVALIDATE, "BGP RPKI Revalidation");
 #define EXPIRE_INTERVAL_DEFAULT 7200
 #define RETRY_INTERVAL_DEFAULT 600
 #define BGP_RPKI_CACHE_SERVER_SYNC_RETRY_TIMEOUT 3
+#define BGP_RPKI_REVALIDATE_ALL_DELAY 1
 
 #define RPKI_DEBUG(...)                                                        \
 	if (rpki_debug_conf || rpki_debug_term) {                              \
@@ -108,6 +109,7 @@ struct rpki_vrf {
 	int rpki_sync_socket_bgpd;
 	char *vrfname;
 	struct event *t_rpki_sync;
+	struct event *t_revalidate_all;
 
 	QOBJ_FIELDS;
 };
@@ -709,6 +711,40 @@ static void revalidate_single_prefix(struct vrf *vrf, struct prefix prefix, afi_
 	}
 }
 
+/*
+ * Revalidate every route of the BGP instances this rpki_vrf serves. This is
+ * done by queueing the default prefix of each address family, whose subtree
+ * is the whole table.
+ */
+static void revalidate_all_routes(struct rpki_vrf *rpki_vrf)
+{
+	struct vrf *vrf = NULL;
+	struct prefix prefix;
+
+	if (rpki_vrf->vrfname) {
+		vrf = vrf_lookup_by_name(rpki_vrf->vrfname);
+		if (!vrf) {
+			flog_err(EC_BGP_VRF_NOT_FOUND, "%s(): vrf for rpki %s not found", __func__,
+				 rpki_vrf->vrfname);
+			return;
+		}
+	}
+
+	RPKI_DEBUG("Revalidating all routes (%s)", vrf ? vrf->name : VRF_DEFAULT_NAME);
+
+	memset(&prefix, 0, sizeof(prefix));
+	prefix.family = AF_INET;
+	revalidate_single_prefix(vrf, prefix, AFI_IP);
+
+	prefix.family = AF_INET6;
+	revalidate_single_prefix(vrf, prefix, AFI_IP6);
+}
+
+static void revalidate_all_routes_event(struct event *event)
+{
+	revalidate_all_routes(EVENT_ARG(event));
+}
+
 static void bgpd_sync_callback(struct event *event)
 {
 	struct prefix prefix;
@@ -750,6 +786,18 @@ static void bgpd_sync_callback(struct event *event)
 		RPKI_DEBUG("Socket overflow detected (%zu), revalidating affected prefixes", size);
 
 		atomic_store_explicit(&rpki_vrf->rtr_update_overflow, 0, memory_order_seq_cst);
+
+		/* While the overflow flag was set, rpki_update_cb_sync_rtr()
+		 * discarded further updates, so the records drained above are
+		 * not all that changed. Revalidate everything once the burst
+		 * is over; the timer is restarted by every overflow. Before
+		 * the initial sync is done, sync_expired() takes care of it.
+		 */
+		if (is_synchronized(rpki_vrf)) {
+			event_cancel(&rpki_vrf->t_revalidate_all);
+			event_add_timer(bm->master, revalidate_all_routes_event, rpki_vrf,
+					BGP_RPKI_REVALIDATE_ALL_DELAY, &rpki_vrf->t_revalidate_all);
+		}
 		return;
 	}
 
@@ -975,6 +1023,12 @@ static void sync_expired(struct event *event)
 	RPKI_DEBUG("rtr_mgr sync is done.");
 
 	rpki_vrf->rtr_is_synced = true;
+
+	/* Routes revalidated during the sync were validated against a table
+	 * that was not in use yet, and updates may have been discarded on
+	 * overflow, so revalidate everything now.
+	 */
+	revalidate_all_routes(rpki_vrf);
 }
 
 static int start(struct rpki_vrf *rpki_vrf)
@@ -1042,6 +1096,7 @@ static void stop(struct rpki_vrf *rpki_vrf)
 	struct cache *cache;
 
 	rpki_vrf->rtr_is_stopping = true;
+	event_cancel(&rpki_vrf->t_revalidate_all);
 	if (is_running(rpki_vrf)) {
 		event_cancel(&rpki_vrf->t_rpki_sync);
 
