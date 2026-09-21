@@ -602,19 +602,16 @@ struct rpki_revalidate_prefix {
 static void rpki_revalidate_prefix(struct event *event)
 {
 	struct rpki_revalidate_prefix *rrp = EVENT_ARG(event);
-	struct bgp_dest *match, *node;
+	struct route_node *match, *rn;
 
 	match = bgp_table_subtree_lookup(rrp->bgp->rib[rrp->afi][rrp->safi],
 					 &rrp->prefix);
 
-	node = match;
+	for (rn = match; rn; rn = route_next_until(rn, match)) {
+		struct bgp_dest *dest = bgp_dest_from_rnode(rn);
 
-	while (node) {
-		if (bgp_dest_has_bgp_path_info_data(node)) {
-			revalidate_bgp_node(rrp->bgp, node, rrp->afi, rrp->safi);
-		}
-
-		node = bgp_route_next_until(node, match);
+		if (dest && bgp_dest_has_bgp_path_info_data(dest))
+			revalidate_bgp_node(rrp->bgp, dest, rrp->afi, rrp->safi);
 	}
 
 	XFREE(MTYPE_BGP_RPKI_REVALIDATE, rrp);

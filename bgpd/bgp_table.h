@@ -327,13 +327,16 @@ static inline uint64_t bgp_table_version(struct bgp_table *table)
 
 /* Find the subtree of the prefix p
  *
- * This will return the first node that belongs the the subtree of p. Including
- * p itself, if it is in the tree.
+ * This will return the root of the subtree of p: p itself, if it is in the
+ * tree, or else the topmost node covered by p. That node can be an internal
+ * node of the radix tree without a bgp_dest attached, so walk the subtree
+ * with route_next_until() and skip nodes whose bgp_dest_from_rnode() is NULL.
  *
- * If the subtree is not present in the table, NULL is returned.
+ * The returned node is locked. If the subtree is not present in the table,
+ * NULL is returned.
  */
-struct bgp_dest *bgp_table_subtree_lookup(const struct bgp_table *table,
-					  const struct prefix *p);
+struct route_node *bgp_table_subtree_lookup(const struct bgp_table *table,
+					    const struct prefix *p);
 
 static inline struct bgp_aggregate *
 bgp_dest_get_bgp_aggregate_info(struct bgp_dest *dest)
