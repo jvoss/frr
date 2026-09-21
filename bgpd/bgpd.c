@@ -3910,6 +3910,9 @@ peer_init:
 
 	bgp_mplsvpn_nh_label_bind_cache_init(&bgp->mplsvpn_nh_label_bind);
 
+	FOREACH_AFI_SAFI (afi, safi)
+		rpki_revalidate_list_init(&bgp->rpki_revalidate[afi][safi]);
+
 	if (name && !bgp->name)
 		bgp->name = XSTRDUP(MTYPE_BGP_NAME, name);
 

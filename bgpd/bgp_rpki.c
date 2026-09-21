@@ -592,29 +592,58 @@ static void pfx_record_to_prefix(struct pfx_record *record,
 	}
 }
 
-struct rpki_revalidate_prefix {
-	struct bgp *bgp;
-	struct prefix prefix;
-	afi_t afi;
-	safi_t safi;
-};
-
+/*
+ * Drain the revalidation queue of one (bgp, afi, safi).
+ *
+ * All prefixes queued for the same (afi, safi) share the single
+ * bgp->t_revalidate[afi][safi] event, so this handler must process every
+ * queued item, not just one. If it runs out of time it reschedules itself
+ * on the same event slot.
+ */
 static void rpki_revalidate_prefix(struct event *event)
 {
-	struct rpki_revalidate_prefix *rrp = EVENT_ARG(event);
-	struct route_node *match, *rn;
+	struct rpki_revalidate_list_head *head = EVENT_ARG(event);
+	struct rpki_revalidate_prefix *rrp;
 
-	match = bgp_table_subtree_lookup(rrp->bgp->rib[rrp->afi][rrp->safi],
-					 &rrp->prefix);
+	while ((rrp = rpki_revalidate_list_pop(head))) {
+		struct bgp *bgp = rrp->bgp;
+		afi_t afi = rrp->afi;
+		safi_t safi = rrp->safi;
+		struct route_node *match, *rn;
 
-	for (rn = match; rn; rn = route_next_until(rn, match)) {
-		struct bgp_dest *dest = bgp_dest_from_rnode(rn);
+		match = bgp_table_subtree_lookup(bgp->rib[afi][safi], &rrp->prefix);
 
-		if (dest && bgp_dest_has_bgp_path_info_data(dest))
-			revalidate_bgp_node(rrp->bgp, dest, rrp->afi, rrp->safi);
+		for (rn = match; rn; rn = route_next_until(rn, match)) {
+			struct bgp_dest *dest = bgp_dest_from_rnode(rn);
+
+			if (dest && bgp_dest_has_bgp_path_info_data(dest))
+				revalidate_bgp_node(bgp, dest, afi, safi);
+		}
+
+		XFREE(MTYPE_BGP_RPKI_REVALIDATE, rrp);
+
+		if (rpki_revalidate_list_count(head) && event_should_yield(event)) {
+			event_add_event(bm->master, rpki_revalidate_prefix, head, 0,
+					&bgp->t_revalidate[afi][safi]);
+			return;
+		}
+	}
+}
+
+static int bgp_rpki_inst_delete(struct bgp *bgp)
+{
+	struct rpki_revalidate_prefix *rrp;
+	afi_t afi;
+	safi_t safi;
+
+	FOREACH_AFI_SAFI (afi, safi) {
+		event_cancel(&bgp->t_revalidate[afi][safi]);
+
+		while ((rrp = rpki_revalidate_list_pop(&bgp->rpki_revalidate[afi][safi])))
+			XFREE(MTYPE_BGP_RPKI_REVALIDATE, rrp);
 	}
 
-	XFREE(MTYPE_BGP_RPKI_REVALIDATE, rrp);
+	return 0;
 }
 
 static void revalidate_single_prefix(struct vrf *vrf, struct prefix prefix, afi_t afi)
@@ -642,8 +671,15 @@ static void revalidate_single_prefix(struct vrf *vrf, struct prefix prefix, afi_
 			rrp->prefix = prefix;
 			rrp->afi = afi;
 			rrp->safi = safi;
-			event_add_event(bm->master, rpki_revalidate_prefix, rrp,
-					0, &bgp->t_revalidate[afi][safi]);
+			rpki_revalidate_list_add_tail(&bgp->rpki_revalidate[afi][safi], rrp);
+
+			/* If the event is already scheduled, it does not get
+			 * rescheduled; the pending run drains the whole list,
+			 * including the item just added.
+			 */
+			event_add_event(bm->master, rpki_revalidate_prefix,
+					&bgp->rpki_revalidate[afi][safi], 0,
+					&bgp->t_revalidate[afi][safi]);
 		}
 	}
 }
@@ -893,6 +929,7 @@ static int bgp_rpki_module_init(void)
 	hook_register(frr_early_fini, bgp_rpki_fini);
 	hook_register(bgp_hook_config_write_debug, &bgp_rpki_write_debug);
 	hook_register(bgp_hook_vrf_update, &bgp_rpki_vrf_update);
+	hook_register(bgp_inst_delete, bgp_rpki_inst_delete);
 	hook_register(bgp_hook_config_write_vrf, &bgp_rpki_hook_write_vrf);
 
 	return 0;
