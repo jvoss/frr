@@ -54,20 +54,25 @@ static void add_node(struct bgp_table *table, const char *prefix_str, struct tes
 	dest->info = tn;
 }
 
-static bool prefix_in_array(const struct prefix *p, struct prefix *prefix_array,
-			    size_t prefix_array_size)
+static bool mark_found(const struct prefix *p, struct prefix *prefix_array, bool *found,
+		       size_t prefix_array_size)
 {
+	bool ret = false;
+
 	for (size_t i = 0; i < prefix_array_size; ++i) {
-		if (prefix_same(p, &prefix_array[i]))
-			return true;
+		if (prefix_same(p, &prefix_array[i])) {
+			found[i] = true;
+			ret = true;
+		}
 	}
-	return false;
+	return ret;
 }
 
-static void check_lookup_result(struct bgp_dest *match, va_list arglist)
+static void check_lookup_result(struct route_node *match, va_list arglist)
 {
 	char *prefix_str;
 	struct prefix *prefixes = NULL;
+	bool *found;
 	size_t prefix_count = 0;
 
 	while ((prefix_str = va_arg(arglist, char *))) {
@@ -78,25 +83,42 @@ static void check_lookup_result(struct bgp_dest *match, va_list arglist)
 			assert(0);
 	}
 
-	/* check if the result is empty and if it is allowd to be empty */
-	assert((prefix_count == 0 && !match) || prefix_count > 0);
+	/* check if the result is empty and if it is allowed to be empty */
 	if (!match) {
+		if (prefix_count) {
+			printf("subtree lookup returned nothing, %zu prefixes expected!\n",
+			       prefix_count);
+			assert(0);
+		}
 		free(prefixes);
 		return;
 	}
 
-	struct bgp_dest *dest = match;
+	found = calloc(prefix_count + 1, sizeof(*found));
 
-	while ((dest = bgp_route_next_until(dest, match))) {
-		const struct prefix *dest_p = bgp_dest_get_prefix(dest);
+	for (struct route_node *rn = match; rn; rn = route_next_until(rn, match)) {
+		struct bgp_dest *dest = bgp_dest_from_rnode(rn);
+		const struct prefix *dest_p;
 
-		if (bgp_dest_has_bgp_path_info_data(dest)
-		    && !prefix_in_array(dest_p, prefixes, prefix_count)) {
+		if (!dest)
+			continue;
+
+		dest_p = bgp_dest_get_prefix(dest);
+		if (bgp_dest_has_bgp_path_info_data(dest) &&
+		    !mark_found(dest_p, prefixes, found, prefix_count)) {
 			printf("prefix %pFX was not expected!\n", dest_p);
 			assert(0);
 		}
 	}
 
+	for (size_t i = 0; i < prefix_count; ++i) {
+		if (!found[i]) {
+			printf("prefix %pFX was not found!\n", &prefixes[i]);
+			assert(0);
+		}
+	}
+
+	free(found);
 	free(prefixes);
 }
 
@@ -110,9 +132,9 @@ static void do_test(struct bgp_table *table, const char *prefix, ...)
 	printf("\nDoing lookup for %s\n", prefix);
 	if (str2prefix(prefix, &p) <= 0)
 		assert(0);
-	struct bgp_dest *dest = bgp_table_subtree_lookup(table, &p);
+	struct route_node *rn = bgp_table_subtree_lookup(table, &p);
 
-	check_lookup_result(dest, arglist);
+	check_lookup_result(rn, arglist);
 
 	va_end(arglist);
 
